@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dividir PDF con Miniaturas Interactivas</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <style>
+    .page-thumbnail {
+      border: 2px solid #e2e8f0; /* Borde claro por defecto */
+      margin: 5px;
+      cursor: pointer;
+      width: 120px;
+      height: 160px;
+      object-fit: contain;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .page-thumbnail.selected {
+      border: 2px solid #3b82f6; /* Borde azul cuando está seleccionado */
+    }
+    .page-thumbnail:hover {
+      transform: scale(1.05); /* Efecto hover */
+    }
+    #pages-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 10px;
+      max-height: 400px;
+      overflow-y: auto;
+      padding: 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background-color: #f8fafc;
+    }
+    .loader {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #3b82f6;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .hidden-checkbox {
+      display: none; /* Ocultar los checkboxes */
+    }
+  </style>
+</head>
+<body class="bg-gray-100 p-8">
+  <div class="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-lg">
+    <h1 class="text-3xl font-bold text-gray-800 mb-6">Dividir PDF</h1>
+    <div class="mb-6">
+      <label class="block text-sm font-medium text-gray-700 mb-2">Sube tu archivo PDF:</label>
+      <input type="file" id="pdfFile" accept="application/pdf" class="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer focus:outline-none">
+    </div>
+    <div id="page-selector" class="hidden mb-6">
+      <p class="text-sm font-medium text-gray-700 mb-2">Selecciona las páginas:</p>
+      <div id="pages-container"></div>
+      <div class="mt-6">
+        <label class="block text-sm font-medium text-gray-700 mb-2">Opciones de división:</label>
+        <div class="space-y-2">
+          <label class="flex items-center">
+            <input type="radio" name="splitOption" value="manual" checked class="mr-2"> Selección manual
+          </label>
+          <label class="flex items-center">
+            <input type="radio" name="splitOption" value="count" class="mr-2"> Dividir en partes de
+            <input type="number" id="splitCount" min="1" class="ml-2 w-16 px-2 py-1 border rounded focus:outline-none focus:border-blue-500" disabled>
+            páginas
+          </label>
+        </div>
+        <div class="mt-4">
+          <label class="block text-sm font-medium text-gray-700 mb-2">Páginas específicas (ej: 1, 3-5, 7):</label>
+          <input type="text" id="specificPages" class="w-full px-3 py-2 border rounded focus:outline-none focus:border-blue-500">
+        </div>
+      </div>
+    </div>
+    <button id="splitButton" class="w-full bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+      <span id="buttonText">Dividir PDF</span>
+      <div id="loader" class="loader hidden mx-auto mt-2"></div>
+    </button>
+    <p id="error-message" class="text-red-500 mt-4 hidden"></p>
+    <p id="success-message" class="text-green-500 mt-4 hidden"></p>
+  </div>
+
+  <script>
+    let pdfDoc = null;
+
+    // Cargar y previsualizar el PDF
+    document.getElementById('pdfFile').addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      showLoader();
+      const fileReader = new FileReader();
+      fileReader.onload = async () => {
+        const pdfData = new Uint8Array(fileReader.result);
+
+        // Cargar el PDF con PDF.js
+        const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+        pdfDoc = await loadingTask.promise;
+
+        // Mostrar miniaturas de las páginas
+        const pagesContainer = document.getElementById('pages-container');
+        pagesContainer.innerHTML = '';
+        for (let i = 1; i <= pdfDoc.numPages; i++) {
+          const page = await pdfDoc.getPage(i);
+          const viewport = page.getViewport({ scale: 0.5 });
+          const canvas = document.createElement('canvas');
+          const context = canvas.getContext('2d');
+
+          canvas.width = 120;
+          canvas.height = 160;
+          const scale = Math.min(canvas.width / viewport.width, canvas.height / viewport.height);
+          const scaledViewport = page.getViewport({ scale });
+
+          await page.render({ canvasContext: context, viewport: scaledViewport }).promise;
+
+          const pageDiv = document.createElement('div');
+          pageDiv.className = 'flex flex-col items-center';
+          pageDiv.innerHTML = `
+            <input type="checkbox" value="${i}" id="page-${i}" class="">
+            <label for="page-${i}" class="cursor-pointer">
+              <canvas class="page-thumbnail"></canvas>
+            </label>
+            <span class="text-sm text-gray-700 mt-1">Página ${i}</span>
+          `;
+          const thumbnail = pageDiv.querySelector('.page-thumbnail');
+          const checkbox = pageDiv.querySelector('input[type="checkbox"]');
+
+          // Añadir evento de clic a la miniatura
+          thumbnail.addEventListener('click', () => {
+            checkbox.checked = !checkbox.checked; // Alternar estado del checkbox
+            console.log(checkbox);
+            checkbox.checked = true;
+            thumbnail.classList.toggle('selected'); // Alternar clase para el borde azul
+          });
+
+          pageDiv.querySelector('canvas').getContext('2d').drawImage(canvas, 0, 0);
+          pagesContainer.appendChild(pageDiv);
+        }
+
+        // Mostrar el selector de páginas
+        document.getElementById('page-selector').classList.remove('hidden');
+        hideLoader();
+      };
+      fileReader.readAsArrayBuffer(file);
+    });
+
+    // Habilitar/deshabilitar campos según la opción seleccionada
+    document.querySelectorAll('input[name="splitOption"]').forEach(input => {
+      input.addEventListener('change', () => {
+        document.getElementById('splitCount').disabled = input.value !== 'count';
+        document.getElementById('specificPages').disabled = input.value !== 'manual';
+      });
+    });
+
+    // Dividir el PDF
+    document.getElementById('splitButton').addEventListener('click', async () => {
+      const splitOption = document.querySelector('input[name="splitOption"]:checked').value;
+      let selectedPages = [];
+
+      if (splitOption === 'manual') {
+        const specificPagesInput = document.getElementById('specificPages').value;
+        if (specificPagesInput) {
+          selectedPages = parsePages(specificPagesInput);
+        } else {
+          selectedPages = Array.from(document.querySelectorAll('#pages-container input:checked'))
+            .map(input => parseInt(input.value));
+        }
+      } else if (splitOption === 'count') {
+        const splitCount = parseInt(document.getElementById('splitCount').value);
+        if (isNaN(splitCount) || splitCount < 1) {
+          showError('Por favor, ingresa un número válido de páginas.');
+          hideLoader();
+          return;
+        }
+        for (let i = 1; i <= pdfDoc.numPages; i += splitCount) {
+          selectedPages.push(i);
+        }
+      }
+
+      if (selectedPages.length === 0) {
+        showError('Por favor, selecciona al menos una página.');
+        hideLoader();
+        return;
+      }
+
+      try {
+        const file = document.getElementById('pdfFile').files[0];
+        const fileReader = new FileReader();
+        fileReader.onload = async () => {
+          const pdfBytes = new Uint8Array(fileReader.result);
+
+          const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
+          const zip = new JSZip();
+
+          if (splitOption === 'manual') {
+            const newPdfDoc = await PDFLib.PDFDocument.create();
+            for (const pageNum of selectedPages) {
+              if (pageNum > 0 && pageNum <= pdfDoc.getPageCount()) {
+                const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [pageNum - 1]);
+                newPdfDoc.addPage(copiedPage);
+              }
+            }
+            const newPdfBytes = await newPdfDoc.save();
+            const blob = new Blob([newPdfBytes], { type: 'application/pdf' });
+            saveAs(blob, 'split.pdf');
+          } else if (splitOption === 'count') {
+            const splitCount = parseInt(document.getElementById('splitCount').value);
+            for (let i = 0; i < selectedPages.length; i++) {
+              const startPage = selectedPages[i];
+              const endPage = Math.min(startPage + splitCount - 1, pdfDoc.getPageCount());
+              const newPdfDoc = await PDFLib.PDFDocument.create();
+              for (let j = startPage; j <= endPage; j++) {
+                const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [j - 1]);
+                newPdfDoc.addPage(copiedPage);
+              }
+              const newPdfBytes = await newPdfDoc.save();
+              zip.file(`parte-${i + 1}.pdf`, newPdfBytes);
+            }
+            const zipBlob = await zip.generateAsync({ type: 'blob' });
+            saveAs(zipBlob, 'partes.zip');
+          }
+          hideLoader();
+          showSuccess('PDF dividido correctamente. Descarga iniciada.');
+        };
+        fileReader.readAsArrayBuffer(file);
+      } catch (error) {
+        console.error('Error al dividir el PDF:', error);
+        showError('Ocurrió un error al dividir el PDF.');
+        hideLoader();
+      }
+    });
+
+    // Función para parsear la entrada de páginas (ej: "1, 3-5" => [1, 3, 4, 5])
+    function parsePages(input) {
+      const pages = new Set();
+      const ranges = input.split(',');
+
+      for (const range of ranges) {
+        const [start, end] = range.split('-').map(Number);
+        if (!isNaN(start)) {
+          if (!isNaN(end)) {
+            for (let i = start; i <= end; i++) {
+              pages.add(i);
+            }
+          } else {
+            pages.add(start);
+          }
+        }
+      }
+
+      return Array.from(pages).sort((a, b) => a - b);
+    }
+
+    // Mostrar mensajes de error
+    function showError(message) {
+      const errorMessage = document.getElementById('error-message');
+      errorMessage.textContent = message;
+      errorMessage.classList.remove('hidden');
+      document.getElementById('success-message').classList.add('hidden');
+    }
+
+    // Mostrar mensajes de éxito
+    function showSuccess(message) {
+      const successMessage = document.getElementById('success-message');
+      successMessage.textContent = message;
+      successMessage.classList.remove('hidden');
+      document.getElementById('error-message').classList.add('hidden');
+    }
+
+    // Mostrar loader
+    function showLoader() {
+      document.getElementById('loader').classList.remove('hidden');
+      document.getElementById('buttonText').classList.add('hidden');
+    }
+
+    // Ocultar loader
+    function hideLoader() {
+      document.getElementById('loader').classList.add('hidden');
+      document.getElementById('buttonText').classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>
